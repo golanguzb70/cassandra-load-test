@@ -1,0 +1,14 @@
+services:
+  cassandra: 
+    container_name: cassandra
+    image: cassandra:latest
+    ports: 
+      - 8000:7000
+      - 9042:9042
+    environment:
+      - CASSANDRA_AUTHENTICATOR=PasswordAuthenticator
+      - CASSANDRA_USER=myuser
+      - CASSANDRA_PASSWORD=mypassword
+      - CASSANDRA_PASSWORD_SEEDER=yes # Important for initializing credentials
+    volumes: 
+      - ./cassandra-data:/var/lib/cassandra
