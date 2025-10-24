@@ -15,8 +15,8 @@ import (
 
 var (
 	CreatedDriverIds             []string      = []string{}
-	TotalOperationCount          int           = 1_000_000
-	InsertOperationsPercent      int           = 100
+	TotalOperationCount          int           = 10_000_000
+	InsertOperationsPercent      int           = 30
 	ResultedInsertOperationCount int           = 0
 	ResultedUpdateOperationCount int           = 0
 	ConcurrentWorkerCount        int           = 5
@@ -35,8 +35,15 @@ func main() {
 
 	fmt.Println("Successfully connected to cassandra")
 
-	startTime := time.Now()
-	drivers := []Driver{}
+	var (
+		drivers         = []Driver{}
+		updateDrivers   = []Driver{}
+		startTime       = time.Now()
+		updateStartTime *time.Time
+		createDuration  time.Duration
+		updateDuration  time.Duration
+	)
+
 	for {
 		uuid, isCreate := WriteOrInsert()
 		if !isCreate {
@@ -47,8 +54,28 @@ func main() {
 				} else {
 					fmt.Printf("Created %d drivers successfully\n", len(drivers))
 				}
+				createDuration = time.Since(startTime)
 			}
-			break
+			driver := GenerateFakeDriver(uuid)
+			updateDrivers = append(updateDrivers, driver)
+			if updateStartTime == nil {
+				updateStartTime = &time.Time{}
+				*updateStartTime = time.Now()
+			}
+			if len(updateDrivers) >= BatchSize || ResultedUpdateOperationCount >= TotalOperationCount-ResultedInsertOperationCount {
+				err := UpdateBatchDrivers(session, updateDrivers)
+				if err != nil {
+					fmt.Println("error while creating drivers", err)
+				} else {
+					fmt.Printf("Updated %d drivers successfully\n", len(updateDrivers))
+				}
+				updateDrivers = updateDrivers[:0]
+				if ResultedUpdateOperationCount >= TotalOperationCount-ResultedInsertOperationCount {
+					updateDuration = time.Since(*updateStartTime)
+					break
+				}
+			}
+			continue
 		}
 
 		driver := GenerateFakeDriver(uuid)
@@ -61,11 +88,15 @@ func main() {
 				fmt.Printf("Created %d drivers successfully\n", len(drivers))
 			}
 			drivers = drivers[:0]
+			createDuration = time.Since(startTime)
 		}
 	}
 	fmt.Println("|-----------------------------------|")
 	fmt.Printf("Total time spend %s\n", time.Since(startTime))
 	fmt.Printf("Total drivers inserted %d\n", ResultedInsertOperationCount)
+	fmt.Printf("Drivers inserted per second %d\n", ResultedInsertOperationCount/int(createDuration.Seconds()))
+	fmt.Printf("Total drivers updated %d\n", ResultedUpdateOperationCount)
+	fmt.Printf("Drivers updated per second %d\n", ResultedUpdateOperationCount/int(updateDuration.Seconds()))
 	fmt.Println("|-----------------------------------|")
 
 }
@@ -82,6 +113,21 @@ func CreateBatchDrivers(session *gocql.Session, drivers []Driver) error {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			driver.Id, driver.Location.Lat, driver.Location.Long, driver.GeoHash, driver.Score,
 			driver.Charge, driver.Active, driver.LastUpdatedTime,
+		)
+	}
+
+	return batch.ExecContext(ctx)
+}
+
+func UpdateBatchDrivers(session *gocql.Session, drivers []Driver) error {
+	ctx := context.Background()
+	batch := session.Batch(gocql.LoggedBatch)
+	for _, driver := range drivers {
+		batch.Query(`UPDATE driver 
+			SET lat=?, lng=?, geo_hash=?, score=?, 
+			phone_charge_percent=?, active=?, last_updated_time=? where id=?`,
+			driver.Location.Lat, driver.Location.Long, driver.GeoHash, driver.Score,
+			driver.Charge, driver.Active, driver.LastUpdatedTime, driver.Id,
 		)
 	}
 
